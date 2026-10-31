@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>몽시티 글래스타운</title>
+<style>
+:root{--glass:rgba(255,255,255,.14);--line:rgba(255,255,255,.35);--txt:#eaf6ff;--accent:#7fd8ff}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#0b1630;color:var(--txt);font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
+canvas{display:block;touch-action:none}
+.panel{position:fixed;background:var(--glass);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 8px 30px rgba(0,0,0,.25)}
+#top{top:12px;left:12px;right:12px;display:flex;align-items:center;gap:10px;padding:8px 12px;flex-wrap:wrap}
+#top h1{font-size:16px;letter-spacing:1px;background:linear-gradient(90deg,#9ff,#c9b6ff);-webkit-background-clip:text;background-clip:text;color:transparent;margin-right:auto}
+button{font:inherit;color:var(--txt);background:rgba(255,255,255,.12);border:1px solid var(--line);border-radius:10px;padding:6px 10px;cursor:pointer}
+button:hover{background:rgba(255,255,255,.24)}
+#chat{left:12px;bottom:12px;width:min(380px,calc(100% - 24px));padding:8px}
+#log{height:130px;overflow-y:auto;font-size:13px;line-height:1.5;padding:2px 4px;margin-bottom:6px}
+#log .sys{color:#9fe8ff}#log b{font-weight:600}
+#chatForm{display:flex;gap:6px}
+#chatInput{flex:1;min-width:0;font:inherit;color:#fff;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:10px;padding:7px 10px;outline:none}
+#online{right:12px;top:70px;padding:8px 12px;font-size:12px;max-width:180px}
+#online h3{font-size:12px;opacity:.8;margin-bottom:4px}
+#toast{left:50%;top:80px;transform:translateX(-50%);padding:10px 16px;font-size:14px;display:none;z-index:5}
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 20%,#1d3d7a,#081025);z-index:10;padding:16px}
+#login .box{width:min(360px,100%);padding:24px;position:relative}
+#login h2{font-size:24px;margin-bottom:4px;background:linear-gradient(90deg,#9ff,#c9b6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+#login p{font-size:13px;opacity:.75;margin-bottom:16px}
+#login input{width:100%;font:inherit;color:#fff;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:12px;outline:none}
+.swatches{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.sw{width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer}
+.sw.on{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
+#enter{width:100%;padding:12px;font-size:16px;background:linear-gradient(90deg,rgba(127,216,255,.5),rgba(181,156,255,.5))}
+@media (max-width:600px){#online{display:none}#log{height:90px}#top h1{font-size:14px}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="top" class="panel">
+  <h1>✦ 몽시티 글래스타운</h1>
+  <button data-emote="wave">👋 인사</button>
+  <button data-emote="jump">⤴ 점프</button>
+  <button data-emote="heart">💗 하트</button>
+  <button id="dayBtn">🌙 밤</button>
+</div>
+<div id="online" class="panel"><h3>접속 중</h3><div id="who"></div></div>
+<div id="toast" class="panel"></div>
+<div id="chat" class="panel">
+  <div id="log"></div>
+  <form id="chatForm"><input id="chatInput" maxlength="60" placeholder="메시지 입력 (Enter)" autocomplete="off"><button>보내기</button></form>
+</div>
+
+<div id="login">
+  <div class="box panel">
+    <h2>글래스타운에 어서오세요</h2>
+    <p>유리 빌딩이 반짝이는 쿼터뷰 가상도시. 바닥을 클릭해서 걷고, 주민들과 대화해보세요.</p>
+    <input id="nameIn" maxlength="10" placeholder="닉네임 (최대 10자)">
+    <div class="swatches" id="sws"></div>
+    <button id="enter">입장하기</button>
+  </div>
+</div>
+
+<script>
+(()=>{
+'use strict';
+// ---------- 기본 설정 ----------
+const TW=64, TH=32, N=36;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){DPR=Math.min(window.devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+'px';cv.style.height=H+'px';}
+addEventListener('resize',resize);resize();
+
+function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const R=rng(6449);
+const iso=(x,y)=>({x:(x-y)*TW/2,y:(x+y)*TH/2});
+
+// ---------- 맵 생성 ----------
+// 0 잔디, 1 도로, 2 보도/광장, 3 물
+const ground=[],block=[];
+for(let y=0;y<N;y++){ground.push(new Array(N).fill(0));block.push(new Array(N).fill(false));}
+const isRoad=i=>i%9===4;
+for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+  if(isRoad(x)||isRoad(y))ground[y][x]=1;
+  else if(isRoad(x-1)||isRoad(x+1)||isRoad(y-1)||isRoad(y+1))ground[y][x]=2;
+}
+const buildings=[],trees=[],props=[];
+const GLASS=['#7fd8ff','#9ab8ff','#b59cff','#7ff0e0','#ffb3e6','#a6f7ff'];
+const NAMES=['크리스탈 타워','오로라 빌딩','블루문 오피스','프리즘 센터','하늘정원 빌딩','미러 플라자','네온 아파트','실버 레지던스','루미나 호텔','클라우드 9','스카이 라운지','유리온실 카페'];
+// 블록 순회
+const spans=[];{let s=0;for(let i=0;i<=N;i++){if(i===N||isRoad(i)){if(i-s>0)spans.push([s,i-1]);s=i+1;}}}
+let bid=0;
+for(const [y0,y1] of spans)for(const [x0,x1] of spans){
+  const w=x1-x0+1,h=y1-y0+1;
+  const cx=(x0+x1)/2,cy=(y0+y1)/2;
+  // 중앙 광장
+  if(x0===14&&y0===14){
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)ground[y][x]=2;
+    for(let y=17;y<=18;y++)for(let x=17;x<=18;x++)block[y][x]=true;
+    props.push({type:'fountain',x:17,y:17});
+    for(const [tx,ty] of [[15,15],[20,15],[15,20],[20,20]]){trees.push({x:tx,y:ty,s:1,kind:'lamp'});block[ty][tx]=true;}
+    continue;
+  }
+  // 호수
+  if(x0===23&&y0===5){
+    for(let y=y0+1;y<=y1-1;y++)for(let x=x0+1;x<=x1-1;x++){const d=Math.hypot((x-cx)/(w/2-.5),(y-cy)/(h/2-.5));if(d<1){ground[y][x]=3;block[y][x]=true;}}
+    continue;
+  }
+  // 외곽/작은 블록 → 숲
+  if(w<6||h<6||R()<.18){
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      if(ground[y][x]===0&&R()<(w<6||h<6?.35:.28)){trees.push({x,y,s:.8+R()*.5,kind:'tree'});block[y][x]=true;}
+    }
+    continue;
+  }
+  // 빌딩 블록: 2x2 구역으로 나눔
+  for(const by of [y0+1,y0+Math.floor(h/2)])for(const bx of [x0+1,x0+Math.floor(w/2)]){
+    if(R()<.12)continue;
+    const bw=R()<.5?3:2, bd=R()<.5?3:2;
+    if(bx+bw-1>x1-1||by+bd-1>y1-1)continue;
+    const b={id:++bid,x:bx,y:by,w:bw,d:bd,h:60+Math.floor(R()*170),c:GLASS[Math.floor(R()*GLASS.length)],name:NAMES[(bid-1)%NAMES.length],seed:R()};
+    buildings.push(b);
+    for(let y=by;y<by+bd;y++)for(let x=bx;x<bx+bw;x++)block[y][x]=true;
+  }
+}
+const walk=(x,y)=>x>=0&&y>=0&&x<N&&y<N&&!block[y][x];
+function buildingAt(x,y){return buildings.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.d);}
+
+// ---------- 지면 프리렌더 ----------
+const OX=N*TW/2, gcv=document.createElement('canvas');
+gcv.width=N*TW;gcv.height=N*TH+TH;
+(function renderGround(){
+  const g=gcv.getContext('2d');
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const p=iso(x,y),sx=p.x+OX,sy=p.y,t=ground[y][x];
+    let col;
+    if(t===0)col=((x+y)%2?'#5fbf8a':'#58b884');
+    else if(t===1)col='#4a5878';
+    else if(t===2)col=((x+y)%2?'#c9d6ea':'#bccbe2');
+    else col='#3fa3d8';
+    g.beginPath();g.moveTo(sx,sy);g.lineTo(sx+TW/2,sy+TH/2);g.lineTo(sx,sy+TH);g.lineTo(sx-TW/2,sy+TH/2);g.closePath();
+    g.fillStyle=col;g.fill();
+    g.strokeStyle='rgba(255,255,255,.08)';g.stroke();
+    if(t===1){ // 차선
+      g.strokeStyle='rgba(255,240,170,.55)';g.lineWidth=2;g.setLineDash([6,6]);g.beginPath();
+      if(isRoad(x)&&!isRoad(y)){g.moveTo(sx+TW/4,sy+TH/4);g.lineTo(sx-TW/4,sy+TH*3/4);}
+      else if(isRoad(y)&&!isRoad(x)){g.moveTo(sx-TW/4,sy+TH/4);g.lineTo(sx+TW/4,sy+TH*3/4);}
+      g.stroke();g.setLineDash([]);g.lineWidth=1;
+    }
+    if(t===0&&R()<.15){g.fillStyle=['#ffe27a','#ff9ad5','#fff'][Math.floor(R()*3)];g.fillRect(sx-8+R()*16,sy+TH/2-4+R()*8,2,2);}
+  }
+})();
+
+// ---------- 아바타 ----------
+const COLORS=['#ff7aa8','#ffb84d','#7fd8ff','#8cf09a','#b59cff','#ff6b6b','#ffe066','#ffffff'];
+class Avatar{
+  constructor(o){Object.assign(this,{name:'?',color:'#7fd8ff',x:17.5,y:21.5,path:[],dir:1,bubble:null,bubbleT:0,emote:null,emoteT:0,jumpT:0,speed:3.2},o);this.walking=false;this.step=0;}
+  goTo(tx,ty){
+    const sx=Math.floor(this.x),sy=Math.floor(this.y);
+    const p=bfs(sx,sy,tx,ty);if(p){this.path=p;return true;}return false;
+  }
+  say(t){this.bubble=t;this.bubbleT=5;}
+  update(dt){
+    this.walking=false;
+    if(this.path.length){
+      const [nx,ny]=this.path[0],tx=nx+.5,ty=ny+.5,dx=tx-this.x,dy=ty-this.y,d=Math.hypot(dx,dy),s=this.speed*dt;
+      if(d<=s){this.x=tx;this.y=ty;this.path.shift();}else{this.x+=dx/d*s;this.y+=dy/d*s;}
+      const sdx=(dx-dy);if(Math.abs(sdx)>.01)this.dir=sdx>0?1:-1;
+      this.walking=true;this.step+=dt*10;
+    }
+    if(this.bubbleT>0)this.bubbleT-=dt;
+    if(this.emoteT>0)this.emoteT-=dt;
+    if(this.jumpT>0)this.jumpT-=dt;
+  }
+}
+function bfs(sx,sy,tx,ty){
+  if(!walk(tx,ty))return null;
+  if(sx===tx&&sy===ty)return[];
+  const prev=new Int32Array(N*N).fill(-1),q=[sy*N+sx];prev[sy*N+sx]=sy*N+sx;
+  const D=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  while(q.length){
+    const c=q.shift(),cx=c%N,cy=(c/N)|0;
+    if(cx===tx&&cy===ty)break;
+    for(const [dx,dy] of D){
+      const nx=cx+dx,ny=cy+dy;
+      if(!walk(nx,ny)||prev[ny*N+nx]!==-1)continue;
+      if(dx&&dy&&(!walk(cx+dx,cy)||!walk(cx,cy+dy)))continue;
+      prev[ny*N+nx]=c;q.push(ny*N+nx);
+    }
+  }
+  if(prev[ty*N+tx]===-1)return null;
+  const path=[];let c=ty*N+tx;
+  while(c!==sy*N+sx){path.unshift([c%N,(c/N)|0]);c=prev[c];}
+  return path;
+}
+
+// ---------- 주민 NPC ----------
+const NPC_DEF=[
+  ['유리',  '#ffb3e6',['오늘 하늘이 유리처럼 맑네요!','광장 분수 보셨어요?','저 빌딩 꼭대기에 올라가보고 싶어요']],
+  ['하늘',  '#7fd8ff',['안녕하세요~ 처음 오셨나요?','호수 근처가 제일 예뻐요','밤이 되면 창문에 불이 켜져요 ✨']],
+  ['미르',  '#ffe066',['산책 중이에요 🚶','같이 걸을래요?','카페 어디 있는지 아세요?']],
+  ['두리',  '#8cf09a',['나무가 참 많죠?','여긴 공기가 좋아요','숲에서 길을 잃었어요 ㅠㅠ']],
+  ['별이',  '#b59cff',['밤하늘 보러 왔어요 🌙','💜','이 동네 처음이에요?']],
+  ['도윤',  '#ff9a6b',['출근길이라 바빠요!','저 크리스탈 타워에서 일해요','점심 뭐 먹지...']],
+  ['로봇Z', '#c0c8d8',['삐빅. 환영합니다.','현재 도시 상태: 평화로움','삐-빅 🤖']],
+  ['나래',  '#ff7aa8',['춤추고 싶은 날이에요 💃','하트 보내주세요!','친구 해요~']],
+];
+const REPLY=[
+  [/안녕|하이|hi|hello|ㅎㅇ/i,['안녕하세요! 😊','반가워요~','하이하이 👋']],
+  [/이름|누구/,['저는 {me}예요!','{me}라고 불러주세요']],
+  [/뭐해|머해/,['산책하고 있어요','그냥 구경 중이에요~']],
+  [/ㅋㅋ|ㅎㅎ|웃/,['ㅋㅋㅋㅋ','😆']],
+  [/사랑|좋아/,['저도요 💗','헤헤 💕']],
+  [/잘가|바이|bye/i,['또 만나요!','안녕히 가세요 👋']],
+];
+const npcs=NPC_DEF.map(([name,color,lines])=>{
+  let x,y;do{x=Math.floor(R()*N);y=Math.floor(R()*N);}while(!walk(x,y)||ground[y][x]===0&&R()<.7);
+  const a=new Avatar({name,color,x:x+.5,y:y+.5,speed:1.6+R()*.8});a.lines=lines;a.npc=true;a.think=R()*4;return a;
+});
+
+// ---------- 상태 ----------
+let me=null, night=false, nightK=0, zoom=1, time=0, clickMark=null;
+const remotes=new Map();
+const myId=Math.random().toString(36).slice(2,9);
+const bc=('BroadcastChannel' in window)?new BroadcastChannel('mongcity'):null;
+
+// ---------- 그리기 ----------
+function diamond(sx,sy){ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+TW/2,sy+TH/2);ctx.lineTo(sx,sy+TH);ctx.lineTo(sx-TW/2,sy+TH/2);ctx.closePath();}
+function hexA(h,a){const n=parseInt(h.slice(1),16);return`rgba(${n>>16},${n>>8&255},${n&255},${a})`;}
+
+function drawBuilding(b){
+  const T=iso(b.x,b.y),Rr=iso(b.x+b.w,b.y),B=iso(b.x+b.w,b.y+b.d),L=iso(b.x,b.y+b.d),h=b.h;
+  // 그림자
+  ctx.fillStyle='rgba(10,20,50,.18)';ctx.beginPath();ctx.moveTo(Rr.x,Rr.y);ctx.lineTo(B.x,B.y);ctx.lineTo(B.x+h*.35,B.y-h*.05);ctx.lineTo(Rr.x+h*.35,Rr.y-h*.05);ctx.fill();
+  const face=(p1,p2,shade,nCols)=>{
+    ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.lineTo(p2.x,p2.y-h);ctx.lineTo(p1.x,p1.y-h);ctx.closePath();
+    const g=ctx.createLinearGradient(p1.x,p1.y-h,p2.x,p2.y);
+    g.addColorStop(0,hexA(b.c,.55*shade+.15));g.addColorStop(.5,hexA(b.c,.35*shade+.1));g.addColorStop(1,hexA(b.c,.6*shade+.15));
+    ctx.fillStyle=g;ctx.fill();
+    ctx.save();ctx.clip();
+    // 창문 격자
+    const rows=Math.floor(h/14);
+    for(let r=1;r<rows;r++){const k=r/rows;ctx.strokeStyle='rgba(255,255,255,.18)';ctx.beginPath();ctx.moveTo(p1.x,p1.y-h*k);ctx.lineTo(p2.x,p2.y-h*k);ctx.stroke();}
+    for(let c=1;c<nCols;c++){const k=c/nCols,x=p1.x+(p2.x-p1.x)*k,y=p1.y+(p2.y-p1.y)*k;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y-h);ctx.stroke();}
+    // 밤 창문 불빛
+    if(nightK>0.05){
+      const rr=rng(b.id*31+nCols);
+      for(let r=0;r<rows;r++)for(let c=0;c<nCols;c++){
+        if(rr()<.45)continue;
+        const k1=c/nCols,k2=(c+1)/nCols,y0=h*(r+1)/rows,y1=h*r/rows;
+        const ax=p1.x+(p2.x-p1.x)*k1,ay=p1.y+(p2.y-p1.y)*k1,bx=p1.x+(p2.x-p1.x)*k2,by=p1.y+(p2.y-p1.y)*k2;
+        ctx.fillStyle=`rgba(255,${210+Math.floor(rr()*40)},140,${.75*nightK})`;
+        ctx.beginPath();ctx.moveTo(ax+1,ay-y0+2);ctx.lineTo(bx-1,by-y0+2);ctx.lineTo(bx-1,by-y1-2);ctx.lineTo(ax+1,ay-y1-2);ctx.fill();
+      }
+    }
+    // 반사광 (움직이는 빛줄기)
+    const sh=((time*30+b.seed*400)%(h+300))-150;
+    ctx.fillStyle='rgba(255,255,255,.22)';ctx.beginPath();
+    ctx.moveTo(p1.x,p1.y-sh);ctx.lineTo(p2.x,p2.y-sh-30);ctx.lineTo(p2.x,p2.y-sh-48);ctx.lineTo(p1.x,p1.y-sh-18);ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=1.2;ctx.stroke();ctx.lineWidth=1;
+  };
+  face(L,B,.9,b.d*3);
+  face(B,Rr,.6,b.w*3);
+  // 지붕
+  ctx.beginPath();ctx.moveTo(T.x,T.y-h);ctx.lineTo(Rr.x,Rr.y-h);ctx.lineTo(B.x,B.y-h);ctx.lineTo(L.x,L.y-h);ctx.closePath();
+  ctx.fillStyle=hexA(b.c,.8);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.85)';ctx.stroke();
+  // 옥상 디테일
+  const cx=(T.x+B.x)/2,cy=(T.y+B.y)/2-h;
+  if(b.h>150){ctx.strokeStyle='#dde';ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx,cy-24);ctx.stroke();
+    ctx.fillStyle=Math.sin(time*4+b.id)>0?'#ff5577':'#661122';ctx.beginPath();ctx.arc(cx,cy-25,2.5,0,7);ctx.fill();}
+  else{ctx.fillStyle='rgba(255,255,255,.5)';ctx.fillRect(cx-6,cy-6,12,6);}
+}
+
+function drawTree(t){
+  const p=iso(t.x+.5,t.y+.5),s=t.s;
+  if(t.kind==='lamp'){
+    ctx.strokeStyle='#556';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(p.x,p.y-40);ctx.stroke();ctx.lineWidth=1;
+    ctx.fillStyle=nightK>.05?`rgba(255,240,180,${.4+.6*nightK})`:'#eef';ctx.beginPath();ctx.arc(p.x,p.y-42,5,0,7);ctx.fill();
+    if(nightK>.05){const g=ctx.createRadialGradient(p.x,p.y-42,2,p.x,p.y-42,60);g.addColorStop(0,`rgba(255,230,150,${.35*nightK})`);g.addColorStop(1,'rgba(255,230,150,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y-42,60,0,7);ctx.fill();}
+    return;
+  }
+  ctx.fillStyle='rgba(0,30,10,.25)';ctx.beginPath();ctx.ellipse(p.x,p.y,14*s,6*s,0,0,7);ctx.fill();
+  ctx.fillStyle='#7a5636';ctx.fillRect(p.x-2.5*s,p.y-14*s,5*s,14*s);
+  const sway=Math.sin(time*1.5+t.x*.7+t.y)*1.5;
+  for(const [dy,r,c] of [[-20,14,'#2f9e63'],[-28,11,'#3cb371'],[-35,7,'#5fd38d']]){ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x+sway*(-dy/35),p.y+dy*s,r*s,0,7);ctx.fill();}
+}
+
+function drawFountain(f){
+  const c=iso(f.x+1,f.y+1);
+  ctx.fillStyle='#dfe8f5';ctx.beginPath();ctx.ellipse(c.x,c.y,52,26,0,0,7);ctx.fill();
+  ctx.fillStyle='#4fb6ea';ctx.beginPath();ctx.ellipse(c.x,c.y-2,44,21,0,0,7);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.5)';
+  for(let i=0;i<3;i++){const k=((time*.6+i/3)%1);ctx.globalAlpha=1-k;ctx.beginPath();ctx.ellipse(c.x,c.y-2,10+k*32,5+k*15,0,0,7);ctx.stroke();}
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#eef4ff';ctx.fillRect(c.x-5,c.y-30,10,28);
+  for(let i=0;i<14;i++){const a=i/14*Math.PI*2,k=(time*1.2+i*.37)%1;const x=c.x+Math.cos(a)*k*30,y=c.y-30-Math.sin(k*Math.PI)*26+k*26+Math.sin(a)*k*12;
+    ctx.fillStyle=`rgba(200,240,255,${1-k})`;ctx.beginPath();ctx.arc(x,y,2,0,7);ctx.fill();}
+}
+
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+function drawAvatar(a){
+  const p=iso(a.x,a.y);let x=p.x,y=p.y;
+  const bob=a.walking?Math.abs(Math.sin(a.step))*3:0;
+  const jump=a.jumpT>0?Math.sin((1-a.jumpT/.6)*Math.PI)*22:0;
+  ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(x,y,11-jump*.2,5-jump*.1,0,0,7);ctx.fill();
+  y-=bob+jump;
+  // 다리
+  const lg=a.walking?Math.sin(a.step)*4:0;
+  ctx.fillStyle='#334';ctx.fillRect(x-5,y-10,4,10+(lg>0?0:lg*.5));ctx.fillRect(x+1,y-10,4,10-(lg>0?lg*.5:0));
+  // 몸
+  roundRect(x-9,y-26,18,18,6);ctx.fillStyle=a.color;ctx.fill();ctx.strokeStyle='rgba(0,0,0,.25)';ctx.stroke();
+  // 팔 (인사 이모트)
+  ctx.strokeStyle=a.color;ctx.lineWidth=4;ctx.lineCap='round';
+  const waving=a.emote==='wave'&&a.emoteT>0;
+  ctx.beginPath();ctx.moveTo(x-9,y-22);ctx.lineTo(x-12,y-12+(a.walking?-lg:0));ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x+9,y-22);
+  if(waving)ctx.lineTo(x+15+Math.sin(time*18)*3,y-36);else ctx.lineTo(x+12,y-12+(a.walking?lg:0));ctx.stroke();
+  ctx.lineWidth=1;
+  // 머리
+  ctx.fillStyle='#ffe0c4';ctx.beginPath();ctx.arc(x,y-36,11,0,7);ctx.fill();
+  ctx.fillStyle=shade(a.color,-.35);ctx.beginPath();ctx.arc(x,y-38,11.5,Math.PI*1.05,Math.PI*1.95);ctx.fill();
+  ctx.fillStyle='#223';const ex=a.dir*2.5;
+  ctx.beginPath();ctx.arc(x-3.5+ex,y-35,1.6,0,7);ctx.arc(x+3.5+ex,y-35,1.6,0,7);ctx.fill();
+  ctx.fillStyle='rgba(255,120,140,.45)';ctx.beginPath();ctx.arc(x-6+ex,y-32,2,0,7);ctx.arc(x+6+ex,y-32,2,0,7);ctx.fill();
+  // 이름표
+  ctx.font='600 11px sans-serif';ctx.textAlign='center';
+  const tw=ctx.measureText(a.name).width+10;
+  roundRect(x-tw/2,y+4+bob+jump,tw,15,7);ctx.fillStyle=a===me?'rgba(127,216,255,.85)':a.npc?'rgba(30,40,70,.7)':'rgba(181,156,255,.85)';ctx.fill();
+  ctx.fillStyle=a===me?'#06203a':'#fff';ctx.fillText(a.name,x,y+15+bob+jump);
+  // 하트 이모트
+  if(a.emote==='heart'&&a.emoteT>0){const k=1-a.emoteT/2;ctx.globalAlpha=1-k;ctx.font='18px sans-serif';ctx.fillText('💗',x+Math.sin(k*10)*6,y-55-k*30);ctx.fillText('💗',x-10+Math.cos(k*9)*5,y-50-k*22);ctx.globalAlpha=1;}
+  // 말풍선
+  if(a.bubble&&a.bubbleT>0){
+    ctx.globalAlpha=Math.min(1,a.bubbleT);
+    ctx.font='13px sans-serif';const lines=wrap(a.bubble,150);const bw=Math.max(...lines.map(l=>ctx.measureText(l).width))+16,bh=lines.length*17+10;
+    const bx=x-bw/2,by=y-56-bh;
+    roundRect(bx,by,bw,bh,10);ctx.fillStyle='rgba(255,255,255,.95)';ctx.fill();ctx.strokeStyle='rgba(120,160,220,.6)';ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x-5,by+bh);ctx.lineTo(x,by+bh+7);ctx.lineTo(x+5,by+bh);ctx.fillStyle='rgba(255,255,255,.95)';ctx.fill();
+    ctx.fillStyle='#1b2540';lines.forEach((l,i)=>ctx.fillText(l,x,by+19+i*17));
+    ctx.globalAlpha=1;
+  }
+}
+function wrap(t,max){const out=[];let cur='';for(const ch of t){if(ctx.measureText(cur+ch).width>max){out.push(cur);cur=ch;}else cur+=ch;}if(cur)out.push(cur);return out.slice(0,4);}
+function shade(h,k){const n=parseInt(h.slice(1),16);const f=v=>Math.max(0,Math.min(255,Math.round(v*(1+k))));return`rgb(${f(n>>16)},${f(n>>8&255)},${f(n&255)})`;}
+
+// ---------- 깊이 정렬 ----------
+function cmp(a,b){
+  if(a.k==='b'&&b.k==='b')return(a.o.x+a.o.w/2+a.o.y+a.o.d/2)-(b.o.x+b.o.w/2+b.o.y+b.o.d/2);
+  if(a.k==='b')return inFront(b,a.o)?-1:1;
+  if(b.k==='b')return inFront(a,b.o)?1:-1;
+  return a.d-b.d;
+}
+function inFront(p,b){return p.px>=b.x+b.w||p.py>=b.y+b.d;}
+
+let cam={x:0,y:0};
+function render(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  // 하늘
+  const sky=ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,mix('#8fd3ff','#0a1030',nightK));sky.addColorStop(1,mix('#e6f6ff','#1b2350',nightK));
+  ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+  if(nightK>.05){ctx.fillStyle=`rgba(255,255,255,${nightK*.8})`;const r=rng(9);for(let i=0;i<90;i++){const s=r()*1.6;ctx.globalAlpha=nightK*(.5+.5*Math.sin(time*2+i));ctx.fillRect(r()*W,r()*H*.6,s,s);}ctx.globalAlpha=1;}
+
+  const mp=me?iso(me.x,me.y):iso(N/2,N/2);
+  cam.x+=(mp.x-cam.x)*.12;cam.y+=(mp.y-30-cam.y)*.12;
+  ctx.setTransform(DPR*zoom,0,0,DPR*zoom,DPR*(W/2-cam.x*zoom),DPR*(H/2-cam.y*zoom));
+
+  ctx.drawImage(gcv,-OX,0);
+  // 물결
+  ctx.strokeStyle='rgba(255,255,255,.35)';
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++)if(ground[y][x]===3){const p=iso(x+.5,y+.5),o=Math.sin(time*2+x+y*1.3)*6;ctx.beginPath();ctx.moveTo(p.x-8+o,p.y);ctx.lineTo(p.x+2+o,p.y);ctx.stroke();}
+  // 클릭 표시
+  if(clickMark&&clickMark.t>0){const p=iso(clickMark.x,clickMark.y);ctx.globalAlpha=clickMark.t;diamond(p.x,p.y);ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.lineWidth=1;ctx.globalAlpha=1;}
+
+  const list=[];
+  for(const b of buildings)list.push({k:'b',o:b});
+  for(const t of trees)list.push({k:'t',o:t,px:t.x,py:t.y,d:t.x+t.y+1});
+  for(const f of props)list.push({k:'f',o:f,px:f.x+1,py:f.y+1,d:f.x+f.y+2});
+  const avs=[...npcs,...remotes.values()];if(me)avs.push(me);
+  for(const a of avs)list.push({k:'a',o:a,px:Math.floor(a.x),py:Math.floor(a.y),d:a.x+a.y});
+  list.sort(cmp);
+  for(const it of list){if(it.k==='b')drawBuilding(it.o);else if(it.k==='t')drawTree(it.o);else if(it.k==='f')drawFountain(it.o);else drawAvatar(it.o);}
+
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  if(nightK>0){ctx.fillStyle=`rgba(10,15,60,${nightK*.35})`;ctx.fillRect(0,0,W,H);}
+}
+function mix(a,b,k){const A=parseInt(a.slice(1),16),B=parseInt(b.slice(1),16);const m=(s)=>Math.round(((A>>s)&255)*(1-k)+((B>>s)&255)*k);return`rgb(${m(16)},${m(8)},${m(0)})`;}
+
+// ---------- 루프 ----------
+let last=performance.now(),netT=0;
+function loop(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;time+=dt;
+  nightK+=((night?1:0)-nightK)*Math.min(1,dt*2);
+  for(const n of npcs){
+    n.update(dt);n.think-=dt;
+    if(n.think<=0&&!n.path.length){
+      n.think=3+R()*6;
+      if(R()<.6){for(let i=0;i<10;i++){const tx=Math.floor(n.x)+Math.floor(R()*13)-6,ty=Math.floor(n.y)+Math.floor(R()*13)-6;if(n.goTo(tx,ty))break;}}
+      if(R()<.3)n.say(n.lines[Math.floor(R()*n.lines.length)]);
+      if(R()<.1){n.emote=R()<.5?'wave':'heart';n.emoteT=2;}
+    }
+  }
+  for(const r of remotes.values()){r.x+=(r.tx-r.x)*Math.min(1,dt*8);r.y+=(r.ty-r.y)*Math.min(1,dt*8);r.walking=Math.hypot(r.tx-r.x,r.ty-r.y)>.05;if(r.walking){r.step+=dt*10;r.dir=(r.tx-r.x)-(r.ty-r.y)>0?1:-1;}
+    if(r.bubbleT>0)r.bubbleT-=dt;if(r.emoteT>0)r.emoteT-=dt;if(r.jumpT>0)r.jumpT-=dt;
+    if(now-r.seen>5000){remotes.delete(r.id);sys(`${r.name}님이 떠났습니다.`);updateWho();}}
+  if(me){me.update(dt);netT-=dt;if(netT<=0){netT=.15;send({t:'pos',x:me.x,y:me.y});}}
+  if(clickMark)clickMark.t-=dt*1.5;
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ---------- 입력 ----------
+function screenToTile(cx,cy){
+  const wx=(cx-W/2)/zoom+cam.x,wy=(cy-H/2)/zoom+cam.y;
+  const fx=(wx/(TW/2)+wy/(TH/2))/2,fy=(wy/(TH/2)-wx/(TW/2))/2;
+  return{x:Math.floor(fx),y:Math.floor(fy),fx,fy};
+}
+function avatarAt(cx,cy){
+  const wx=(cx-W/2)/zoom+cam.x,wy=(cy-H/2)/zoom+cam.y;
+  return[...npcs,...remotes.values()].find(a=>{const p=iso(a.x,a.y);return Math.abs(wx-p.x)<13&&wy<p.y+2&&wy>p.y-50;});
+}
+let down=null;
+cv.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y};});
+cv.addEventListener('pointerup',e=>{
+  if(!me||!down)return;const moved=Math.hypot(e.clientX-down.x,e.clientY-down.y);down=null;if(moved>8)return;
+  const a=avatarAt(e.clientX,e.clientY);
+  if(a){toast(`${a.name} · ${a.npc?'글래스타운 주민':'방문자'}`);if(a.npc){a.say(['안녕하세요!','무슨 일이세요?','반가워요 😊'][Math.floor(Math.random()*3)]);a.emote='wave';a.emoteT=2;}
+    const t={x:Math.floor(a.x)+1,y:Math.floor(a.y)};if(walk(t.x,t.y))me.goTo(t.x,t.y);return;}
+  const t=screenToTile(e.clientX,e.clientY);
+  // 빌딩 클릭 (높이 고려해 여러 칸 위쪽 탐색)
+  for(let k=0;k<10;k++){const b=buildingAt(t.x+k,t.y+k);if(b){const wy=(e.clientY-H/2)/zoom+cam.y,base=iso(b.x+b.w,b.y+b.d).y;if(wy>base-b.h-10||k===0){toast(`🏢 ${b.name} (${b.h*0.4|0}층) · 입장 준비중`);return;}}}
+  if(walk(t.x,t.y)){me.goTo(t.x,t.y);clickMark={x:t.x,y:t.y,t:1};}
+});
+cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.5,Math.min(1.8,zoom*(e.deltaY<0?1.1:.9)));},{passive:false});
+addEventListener('keydown',e=>{
+  if(!me||document.activeElement===chatInput)return;
+  const k={ArrowUp:[0,-1],w:[0,-1],ArrowDown:[0,1],s:[0,1],ArrowLeft:[-1,0],a:[-1,0],ArrowRight:[1,0],d:[1,0]}[e.key];
+  if(k){const tx=Math.floor(me.x)+k[0],ty=Math.floor(me.y)+k[1];if(walk(tx,ty))me.path=[[tx,ty]];e.preventDefault();}
+  if(e.key==='Enter'){chatInput.focus();e.preventDefault();}
+});
+
+// ---------- UI ----------
+const log=document.getElementById('log'),chatInput=document.getElementById('chatInput'),toastEl=document.getElementById('toast');
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function addLog(html){const d=document.createElement('div');d.innerHTML=html;log.appendChild(d);while(log.children.length>80)log.firstChild.remove();log.scrollTop=log.scrollHeight;}
+function sys(t){addLog(`<span class="sys">✦ ${esc(t)}</span>`);}
+function chatLine(a,t){addLog(`<b style="color:${a.color}">${esc(a.name)}</b>: ${esc(t)}`);}
+let toastTimer;function toast(t){toastEl.textContent=t;toastEl.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.style.display='none',2200);}
+function updateWho(){document.getElementById('who').innerHTML=[me,...remotes.values()].filter(Boolean).map(a=>`<div><span style="color:${a.color}">●</span> ${esc(a.name)}${a===me?' (나)':''}</div>`).join('')+`<div style="opacity:.6;margin-top:4px">주민 NPC ${npcs.length}명</div>`;}
+
+document.getElementById('chatForm').addEventListener('submit',e=>{
+  e.preventDefault();const t=chatInput.value.trim();if(!t||!me)return;chatInput.value='';chatInput.blur();
+  me.say(t);chatLine(me,t);send({t:'chat',msg:t});
+  // 근처 NPC 반응
+  const near=npcs.filter(n=>Math.hypot(n.x-me.x,n.y-me.y)<5).sort((a,b)=>Math.hypot(a.x-me.x,a.y-me.y)-Math.hypot(b.x-me.x,b.y-me.y))[0];
+  if(near)setTimeout(()=>{let ans=null;for(const [re,arr] of REPLY)if(re.test(t)){ans=arr[Math.floor(Math.random()*arr.length)];break;}
+    if(!ans)ans=['오~ 그렇군요!','정말요?','ㅎㅎ 재밌네요','음... 🤔',`${me.name}님 반가워요!`][Math.floor(Math.random()*5)];
+    ans=ans.replace('{me}',near.name);near.path=[];near.say(ans);chatLine(near,ans);},700+Math.random()*800);
+});
+document.querySelectorAll('[data-emote]').forEach(b=>b.addEventListener('click',()=>{if(!me)return;doEmote(me,b.dataset.emote);send({t:'emote',e:b.dataset.emote});}));
+function doEmote(a,e){if(e==='jump')a.jumpT=.6;else{a.emote=e;a.emoteT=2;}}
+const dayBtn=document.getElementById('dayBtn');
+dayBtn.addEventListener('click',()=>{night=!night;dayBtn.textContent=night?'☀️ 낮':'🌙 밤';sys(night?'밤이 되었습니다. 빌딩에 불이 켜집니다.':'아침이 밝았습니다.');});
+
+// ---------- 탭 간 멀티플레이 (BroadcastChannel) ----------
+function send(m){if(bc&&me)bc.postMessage({...m,id:myId,name:me.name,color:me.color});}
+if(bc)bc.onmessage=({data:m})=>{
+  if(!me||m.id===myId)return;
+  let r=remotes.get(m.id);
+  if(!r){r=new Avatar({name:m.name,color:m.color,x:m.x||17.5,y:m.y||21.5});r.id=m.id;r.tx=r.x;r.ty=r.y;remotes.set(m.id,r);sys(`${m.name}님이 입장했습니다.`);updateWho();send({t:'pos',x:me.x,y:me.y});}
+  r.seen=performance.now();
+  if(m.t==='pos'){r.tx=m.x;r.ty=m.y;}
+  if(m.t==='chat'){r.say(m.msg);chatLine(r,m.msg);}
+  if(m.t==='emote')doEmote(r,m.e);
+  if(m.t==='bye'){remotes.delete(m.id);sys(`${m.name}님이 떠났습니다.`);updateWho();}
+};
+addEventListener('beforeunload',()=>send({t:'bye'}));
+
+// ---------- 로그인 ----------
+let pick=COLORS[Math.floor(Math.random()*COLORS.length)];
+const sws=document.getElementById('sws');
+COLORS.forEach(c=>{const d=document.createElement('div');d.className='sw'+(c===pick?' on':'');d.style.background=c;d.onclick=()=>{pick=c;sws.querySelectorAll('.sw').forEach(s=>s.classList.remove('on'));d.classList.add('on');};sws.appendChild(d);});
+const nameIn=document.getElementById('nameIn');
+try{nameIn.value=localStorage.getItem('mong_name')||'';}catch(e){}
+function enter(){
+  const name=nameIn.value.trim()||('손님'+Math.floor(Math.random()*900+100));
+  try{localStorage.setItem('mong_name',name);}catch(e){}
+  me=new Avatar({name,color:pick,x:17.5,y:21.5});
+  document.getElementById('login').style.display='none';
+  sys(`${name}님, 글래스타운에 오신 것을 환영합니다!`);
+  sys('바닥 클릭/탭 = 이동 · 방향키/WASD · 휠 = 줌 · Enter = 채팅');
+  sys('같은 브라우저에서 새 탭을 열면 다른 아바타로 함께 놀 수 있어요.');
+  updateWho();send({t:'pos',x:me.x,y:me.y});
+  setTimeout(()=>{const n=npcs[1];n.say(`${name}님 어서오세요! 👋`);chatLine(n,`${name}님 어서오세요! 👋`);},1200);
+}
+document.getElementById('enter').onclick=enter;
+nameIn.addEventListener('keydown',e=>{if(e.key==='Enter')enter();});
+
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
